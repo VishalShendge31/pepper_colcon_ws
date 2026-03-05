@@ -5,7 +5,7 @@ This guide provides a structured workflow to bring up the full Pepper AI integra
 ## 📋 System Requirements
 - **Hardware**: Pepper Robot, Host PC/Jetson (Ubuntu 22.04).
 - **Network**: Both devices must be on the same local network.
-- **Docker**: Installed on the Host PC for ROS 1 compatibility.
+- **Docker**: Installed on the Host PC for ROS 1 compatibility and ROS 2 environment.
 
 ---
 
@@ -21,34 +21,47 @@ docker compose up -d
 docker exec -it ros1_pepper_container bash
 source /devel/setup.bash
 roslaunch naoqi_driver naoqi_driver.launch \
-    nao_ip:=<PEPPER_IP> \
+    nao_ip:=192.168.100.163 \
     qi_listen_url:=tcp://0.0.0.0:56000 \
     network_interface:=docker0
 ```
 
-### 2. Terminal 2: ROS 1 <-> ROS 2 Bridge
+### 2. Terminal 2: ROS 1 <-> ROS 2 Bridge (Docker)
 Enables communication between the ROS 1 driver and the ROS 2 AI stack.
 ```bash
-# Run in the Host ROS 2 Humble environment
-source /opt/ros/humble/setup.bash
-source ~/ros-humble-ros1-bridge/install/local_setup.bash
-export ROS_MASTER_URI=http://localhost:11311
-ros2 run ros1_bridge dynamic_bridge --bridge-all-topics
+docker run --rm -it \
+    --network=host \
+    -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+    -v $HOME:/home/user \
+    dustynv/ros:humble-desktop-l4t-r36.4.0 \
+    bash -c "source /home/user/ros-humble-ros1-bridge/install/local_setup.bash && \
+             export ROS_MASTER_URI=http://10.81.162.71:11311 && \
+             ros2 run ros1_bridge dynamic_bridge --bridge-all-topics"
 ```
 
 ### 3. Terminal 3: Pepper Robot Server (SSH)
 Connect to the robot to run the low-level audio and tablet bridge.
 ```bash
-ssh nao@<PEPPER_IP>
-# Inside Pepper's terminal
+# ssh nao@192.168.100.20
+ssh nao@192.168.100.163
 python pepper_server.py
 ```
 
-### 4. Terminal 4: ROS 2 AI Stack (Unified Launch)
-Launches the full AI pipeline (ASR, LLM, VLM, TTS, Dashboard).
+### 4. Terminal 4: ROS 2 AI Container
+Start the ROS 2 environment where your workspace is located.
 ```bash
-cd ~/pepper_colcon_ws
-source install/setup.bash
+docker run -it --rm \
+    --network=host \
+    --env DISPLAY=$DISPLAY \
+    -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v $HOME:/home/user \
+    dustynv/ros:humble-desktop-l4t-r36.4.0
+```
+
+**Inside the ROS 2 Container:**
+```bash
+source pepper_colcon_ws/install/setup.bash
 ros2 launch pepper_bringup pepper_bringup.launch.py \
     openai_api_key:=<YOUR_OPENAI_KEY> \
     openai_model:=gpt-4o
@@ -57,7 +70,7 @@ ros2 launch pepper_bringup pepper_bringup.launch.py \
 ---
 
 ## 🛠 Manual Node Execution (Optional)
-If you need to debug specific components, you can run nodes individually after completing steps 1-3.
+If you need to debug specific components, you can run nodes individually inside the ROS 2 container after completing steps 1-3.
 
 | Component | Command |
 | :--- | :--- |
