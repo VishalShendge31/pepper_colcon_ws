@@ -42,8 +42,7 @@ docker run --rm -it \
 ### 3. Terminal 3: Pepper Robot Server (SSH)
 Connect to the robot to run the low-level audio and tablet bridge.
 ```bash
-# ssh nao@192.168.100.20
-ssh nao@192.168.100.163
+ssh nao@<PEPPER_IP>
 python pepper_server.py
 ```
 
