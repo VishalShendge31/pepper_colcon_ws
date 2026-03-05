@@ -1,0 +1,17 @@
+# ROS 2 build artifacts
+build/
+install/
+log/
+src/pepper_orpheus_tts/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDEs
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
