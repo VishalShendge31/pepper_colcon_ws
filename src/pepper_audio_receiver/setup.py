@@ -13,10 +13,10 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='Vishal_Shendge',
+    maintainer='Vishal Shendge',
     maintainer_email='shendge.vishal.vilas@gmail.com',
-    description='ROS 2 package for receiving audio data from the Pepper robot.',
-    license='MIT',
+    description='TODO: Package description',
+    license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [

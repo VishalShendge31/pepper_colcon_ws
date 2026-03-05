@@ -10,8 +10,9 @@ import os
 import time
 import glob
 import numpy as np
-import scipy.io.wavfile as wavfile
+from scipy.io import wavfile
 import noisereduce as nr
+import io
 
 HOST = "0.0.0.0" 
 PORT = 5005       
@@ -106,15 +107,18 @@ class PepperAudioReceiver(Node):
                             audio_path = os.path.join(self.audio_save_dir, f"chunk_{timestamp}.wav")
                             
                             try:
-                                # Convert raw bytes to 16-bit PCM numpy array
-                                # Pepper records 1 channel, 16000Hz, 16-bit
-                                audio_np = np.frombuffer(audio_data, dtype=np.int16)
+                                # The robot sends a full WAV file (with header).
+                                # Use wavfile.read() on a BytesIO buffer to correctly
+                                # parse the header and extract pure PCM samples.
+                                sample_rate, audio_np = wavfile.read(io.BytesIO(audio_data))
                                 
-                                # Apply Noise Reduction (stationary noise reduction)
-                                reduced_noise = nr.reduce_noise(y=audio_np, sr=16000, stationary=True, prop_decrease=0.8)
+                                # Apply Noise Reduction (float32 for best quality)
+                                audio_float = audio_np.astype(np.float32) / 32768.0
+                                reduced_noise = nr.reduce_noise(y=audio_float, sr=sample_rate, stationary=True, prop_decrease=0.5)
                                 
-                                # Save the cleaned audio to wav file
-                                wavfile.write(audio_path, 16000, reduced_noise)
+                                # Scale back to 16-bit and save as clean WAV for Whisper
+                                reduced_int16 = (reduced_noise * 32768.0).clip(-32768, 32767).astype(np.int16)
+                                wavfile.write(audio_path, sample_rate, reduced_int16)
                                 
                             except Exception as e:
                                 self.get_logger().error(f"Failed to process and save audio: {e}")

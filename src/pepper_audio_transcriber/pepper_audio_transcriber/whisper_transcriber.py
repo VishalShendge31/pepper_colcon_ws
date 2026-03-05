@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import os
 import time
+import warnings
 import torch
 import whisper
 import numpy as np
+import io
+# Suppress deprecation warnings from torchaudio used by silero-vad
+warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 
 import rclpy
 from rclpy.node import Node
@@ -15,13 +19,14 @@ class WhisperTranscriberNode(Node):
 
         # Parameters
         self.declare_parameter('lang', 'None')
-        self.declare_parameter('model', 'small')
+        self.declare_parameter('model', 'base')
         self.declare_parameter('require_wake_word', True)
         
         model_size = self.get_parameter('model').get_parameter_value().string_value
         self.require_wake_word = self.get_parameter('require_wake_word').get_parameter_value().bool_value
 
         self.model = self.load_whisper(model_size)
+        self.vad_model = self.load_vad()
 
         self.pub_transcript = self.create_publisher(String, 'whisper_transcript', 10)
         self.sub_audio = self.create_subscription(String, 'pepper_audio', self.audio_callback, 10)
@@ -57,10 +62,31 @@ class WhisperTranscriberNode(Node):
         self.get_logger().info(f"  state = {self.state}")
         self.get_logger().info(f"  wake_words count = {len(self.wake_words)}")
 
+        # Hallucination Filter - common Whisper "ghost" outputs during silence
+        self.junk_phrases = [
+            "thanks for watching", "thank you for watching", "please subscribe",
+            "you", "thank you", "watching", "subtitle by", "translated by",
+            "sh", "s", "m", "h", "uh", "um"
+        ]
+
+
     def load_whisper(self, model_size: str):
         device_str = "cuda" if torch.cuda.is_available() else "cpu"
         self.get_logger().info(f"Loading Whisper '{model_size}' on {device_str}...")
         return whisper.load_model(model_size, device=device_str)
+
+    def load_vad(self):
+        """Load Silero VAD from the pip package (model bundled, no internet needed)."""
+        try:
+            from silero_vad import load_silero_vad
+            self.get_logger().info("Loading Silero VAD from pip package...")
+            vad_model = load_silero_vad()
+            vad_model.eval()
+            self.get_logger().info("Silero VAD loaded successfully (offline).")
+            return vad_model
+        except Exception as e:
+            self.get_logger().warn(f"Could not load Silero VAD: {e}. Running without VAD.")
+            return None
 
     def transcribe_file(self, path: str, lang: str | None) -> str:
         try:
@@ -77,19 +103,53 @@ class WhisperTranscriberNode(Node):
                 duration = len(audio_data) / sr
                 rms = np.sqrt(np.mean(audio_data**2))
 
-                if duration < 0.5 or rms < 0.001:
+                # Stricter RMS Gate (0.01) to ignore silence/background hum
+                if duration < 0.5 or rms < 0.01:
                     return ""
+
+                # === Silero VAD Gate ===
+                if self.vad_model is not None:
+                    try:
+                        from silero_vad import read_audio, get_speech_timestamps
+                        audio_tensor = read_audio(path, sampling_rate=16000)
+                        timestamps = get_speech_timestamps(audio_tensor, self.vad_model, sampling_rate=16000, threshold=0.45)
+                        if not timestamps:
+                            self.get_logger().debug("VAD: No speech detected, skipping Whisper.")
+                            return ""
+                    except Exception as vad_e:
+                        self.get_logger().debug(f"VAD check failed: {vad_e}")
             except Exception:
                 pass
 
+            device_is_cuda = self.model.device.type == "cuda"
+
+            # Use language=None for auto-detection (supports EN and DE simultaneously).
+            # Whisper detects the language internally as part of transcription,
+            # which is more accurate for short utterances than a separate detect_language pass.
+            # If the user explicitly passed a lang param, respect that.
+            transcribe_lang = lang  # None = auto-detect (handles EN+DE)
+
             result = self.model.transcribe(
                 path,
-                language=lang,
-                fp16=False,
+                language=transcribe_lang,
+                fp16=device_is_cuda,
+                initial_prompt="Pepper.",     # Minimal spelling hint (avoids biasing transcription)
+                temperature=0,               # Greedy decoding = less hallucination
+                beam_size=5,                 # More thorough search
+                condition_on_previous_text=False,  # Prevent old context from corrupting new audio
+                no_speech_threshold=0.6,     # Skip chunk if model thinks it's mostly silence
+                logprob_threshold=-1.0,      # Filter low-confidence text
                 verbose=False
             )
 
             text = (result.get("text") or "").strip()
+            
+            # Junk Filter
+            text_lower = text.lower().strip().rstrip(".,!?")
+            if text_lower in self.junk_phrases:
+                self.get_logger().debug(f"Filtered junk/hallucination: '{text}'")
+                return ""
+                
             return text
 
         except Exception as e:

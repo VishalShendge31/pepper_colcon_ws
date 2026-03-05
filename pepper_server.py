@@ -1,6 +1,6 @@
+from __future__ import print_function
 # -*- coding: utf-8 -*-
 
-from __future__ import print_function
 import socket
 import time
 import struct
@@ -14,12 +14,12 @@ from naoqi import ALProxy
 
 # ====== CONFIGURATION ======
 
-ROBOT_IP = "10.219.165.53"
+ROBOT_IP = "192.168.100.133"
 ROBOT_PORT = 9559
-HOST_PC_IP = "10.219.165.184"
+HOST_PC_IP = "192.168.100.170"
 TTS_PORT = 5005
-RECORD_SECONDS = 3  # Chunk size for continuous listening
-AUDIO_FILE = "/home/nao/recorded_audio_stream.wav"
+RECORD_SECONDS = 5  # Chunk size for continuous listening (increased from 3 to reduce gaps)
+AUDIO_FILE = "/home/nao/recorded_audio_stream.wav"  # WAV format (only supported format by ALAudioRecorder)
 
 # ====== UI STATUS TEXTS ======
 
@@ -41,6 +41,10 @@ tracker = ALProxy("ALTracker", ROBOT_IP, ROBOT_PORT)
 motion = ALProxy("ALMotion", ROBOT_IP, ROBOT_PORT)
 tablet = ALProxy("ALTabletService", ROBOT_IP, ROBOT_PORT)
 battery_proxy = ALProxy("ALBattery", ROBOT_IP, ROBOT_PORT)
+life = ALProxy("ALAutonomousLife", ROBOT_IP, ROBOT_PORT)
+speaking_move = ALProxy("ALSpeakingMovement", ROBOT_IP, ROBOT_PORT)
+animation = ALProxy("ALAnimationPlayer", ROBOT_IP, ROBOT_PORT)
+posture = ALProxy("ALRobotPosture", ROBOT_IP, ROBOT_PORT)
 
 # ====== BATTERY POLLING ======
 
@@ -63,14 +67,41 @@ bat_thread.start()
 # ====== WAKE-UP KEEPER (prevent Pepper from sleeping) ======
 
 def wake_up_keeper():
-    """Call ALMotion.wakeUp() every 2 minutes to prevent Pepper from going to sleep."""
+    """Keep Pepper awake, stiff, and in solitary life mode."""
+    # Ensure starting state
+    try:
+        motion.wakeUp()
+        motion.setStiffnesses("Body", 1.0)
+        if life.getState() != "solitary":
+            life.setState("solitary")
+    except:
+        pass
+
     while True:
         try:
+            # 1. Wake up / Keep awake
             motion.wakeUp()
-            print("[WakeUp] ALMotion.wakeUp() called - Pepper kept awake")
+            
+            # 2. Reinforce stiffness (prevent 'relaxing')
+            motion.setStiffnesses("Body", 1.0)
+            
+            # 3. Ensure Autonomous Life and Abilities are active
+            if life.getState() != "solitary":
+                print("[WakeUp] Restoring Autonomous Life to 'solitary' mode")
+                life.setState("solitary")
+            
+            # Enable Liveliness
+            life.setAutonomousAbilityEnabled("BackgroundMovement", True)
+            life.setAutonomousAbilityEnabled("BasicAwareness", True)
+            life.setAutonomousAbilityEnabled("SpeakingMovement", True)
+            speaking_move.setEnabled(True)
+            speaking_move.setMode("random")
+            motion.setMoveArmsEnabled(True, True)
+                
+            print("[WakeUp] Health check: WakeUp + Liveliness OK")
         except Exception as e:
-            print("[WakeUp] Error calling wakeUp: {}".format(e))
-        time.sleep(120)  # Wait 2 minutes before next call
+            print("[WakeUp] Error in keeper loop: {}".format(e))
+        time.sleep(60)  # Check every 60 seconds for better responsiveness
 
 wakeup_thread = threading.Thread(target=wake_up_keeper)
 wakeup_thread.setDaemon(True)
@@ -175,10 +206,18 @@ def tts_server():
                         except:
                             pass
 
-                    print("Playing TTS audio...")
+                    print("Playing TTS audio with animations...")
                     try:
+                        # Start a random gesture in the background
+                        # This works well for Piper/Orpheus audio playback
+                        gesture_thread = threading.Thread(target=lambda: animation.run("animations/Stand/Gestures/Explain_1"))
+                        gesture_thread.start()
+                        
                         player.playFile(tts_file)
                         time.sleep(0.5)
+                        
+                        # Stop animations if still running
+                        animation.stopAll()
                     except Exception as e:
                         print("Error playing TTS audio: {}".format(e))
 
@@ -236,7 +275,7 @@ try:
             except:
                 pass
 
-            # 2. Start recording chunk
+            # 2. Start recording chunk as WAV (only supported format by ALAudioRecorder)
             recorder.startMicrophonesRecording(AUDIO_FILE, "wav", 16000, [0, 0, 1, 0])
             time.sleep(RECORD_SECONDS)
             recorder.stopMicrophonesRecording()

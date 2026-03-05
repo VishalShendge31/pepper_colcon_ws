@@ -13,10 +13,10 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='Vishal_Shendge',
-    maintainer_email='shendge.vishal.vilas@gmail.com',
-    description='ROS 2 package for transcribing audio data from the Pepper robot using Whisper.',
-    license='MIT',
+    maintainer='root',
+    maintainer_email='root@todo.todo',
+    description='TODO: Package description',
+    license='TODO: License declaration',
     # REMOVED: tests_require=['pytest'] - Line 18 DELETED
     entry_points={
         'console_scripts': [
